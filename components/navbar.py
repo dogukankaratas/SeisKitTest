@@ -7,7 +7,7 @@ def get_icon(icon, url):
     return dmc.Anchor(href=url, children=[
         DashIconify(icon=icon, width=24, height=24)
     ], className="m-2", target='_blank')
-
+asdasd
 navbarComponent = dmc.Header(
     id="navbarComponent",
     height=70,
