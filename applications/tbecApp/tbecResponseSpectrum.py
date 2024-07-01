@@ -2,7 +2,272 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import scipy.interpolate as interp
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d,CloughTocher2DInterpolator
+
+
+TDTH = r"applications\\tbecApp\data\\AFAD_TDTH_parameters.csv"
+
+Ss_range = [0.25 , 0.50 , 0.75, 1.00 , 1.25 , 1.50 ]
+FS_table = {"ZA": [0.8 , 0.8 , 0.8 , 0.8 , 0.8 , 0.8], 
+                "ZB": [0.9 , 0.9 , 0.9 , 0.9 , 0.9 , 0.9], 
+                "ZC": [1.3 , 1.3 , 1.2 , 1.2 , 1.2 , 1.2],
+                "ZD": [1.6 , 1.4 , 1.2 , 1.1 , 1.0 , 1.0],
+                "ZE": [2.4 , 1.7 , 1.3 , 1.1 , 0.9 , 0.8]}
+
+S1_range = [0.10 , 0.20 , 0.30, 0.40 , 0.50 , 0.60 ]
+F1_table = {"ZA": [0.8 , 0.8 , 0.8 , 0.8 , 0.8 , 0.8], 
+                "ZB": [0.8 , 0.8 , 0.8 , 0.8 , 0.8 , 0.8], 
+                "ZC": [1.5 , 1.5 , 1.5 , 1.5 , 1.5 , 1.4],
+                "ZD": [2.4 , 2.2 , 2.0 , 1.9 , 1.8 , 1.7],
+                "ZE": [4.2 , 3.3 , 2.8 , 2.4 , 2.2 , 2.0]}
+
+def GetSpectralMapVariables(Intensity : str, Latitude : float, Longitude : float) -> dict:
+    """Finds spectral map values ??according to the coordinates given in the spectrum map
+
+    Args:
+        Intensity (str): intensity level ptions: DD1, DD2, DD3, DD4
+        Latitude (float): Latitude coordinate
+        Longitude (float): Longitude coordinate
+
+    Returns:
+        dict: spectral_values = {"Ss":[],"S1":[],"PGA":[],"PGV":[]}
+    """
+    afad_spectra_params_df = pd.read_csv(TDTH)   
+
+    # grid locattions
+    x = afad_spectra_params_df["LAT"].to_list()
+    y = afad_spectra_params_df["LON"].to_list()
+    
+    # spectral values dictionary
+    spectral_value_dict = {}
+    for column_name in ["Ss","S1","PGA","PGV"]:
+
+        z = afad_spectra_params_df[ f"{column_name}-{Intensity}"].to_list()
+
+        interpolator = CloughTocher2DInterpolator( np.array([x,y]).T , z)
+
+        spectral_value = np.round( interpolator( Latitude, Longitude)  , 3 )
+        spectral_value_dict[column_name] = spectral_value
+    
+    Ss = spectral_value_dict["Ss"]
+    S1 = spectral_value_dict["S1"]
+    PGA = spectral_value_dict["PGA"]
+    PGV = spectral_value_dict["PGV"]
+
+    return spectral_value_dict
+
+def Get_Fs(Ss : float,Soil : str)-> float:
+    """Calculates local ground effect coefficient for short period region
+
+    Args:
+        Ss (float): Spectral response acceleration parameter at a period of 0.2 s
+        Soil (str): Soil class
+
+    Returns:
+        float: Fs
+    """
+        # Short period
+    if Ss < Ss_range[0]:
+        Fs = FS_table[Soil][0]
+    elif Ss > Ss_range[-1]:
+        Fs = FS_table[Soil][-1]
+    else:
+        Fs = np.round( np.interp(Ss,Ss_range, FS_table[Soil]) , 3)
+    return Fs
+
+def Get_F1(S1 : float,Soil : str)-> float:
+    """Calculates local ground effect coefficient for 1.0 period
+
+    Args:
+        S1 (float): Spectral response acceleration parameter at a period of 1 s
+        Soil (str): Soil class
+
+    Returns:
+        float: F1
+    """
+    # 1sec period
+    if S1 < S1_range[0] :
+        F1 = F1_table[Soil][0]
+        SD1 = S1 * F1
+    elif S1 > S1_range[-1]:
+        F1 = F1_table[Soil][-1]
+        SD1 = S1 * F1
+    else:
+        F1 = np.round(np.interp(S1, S1_range, F1_table[Soil]), 3)
+    return F1
+
+def GetShortPeriodCoefficient(Fs : float, Ss : float)-> float:
+    """Short period design spectral acceleration coefficient [dimensionless]
+
+    Args:
+        Fs (float): Local ground effect coefficient for short period region
+        Ss (float): Short period map spectral acceleration coefficient [dimensionless]
+
+    Returns:
+        float: S_DS
+    """
+    # Short period
+    SDs = Ss * Fs
+    return SDs
+
+def GetOneSecondsPeriodCoefficient(S1 : float, F1 : float) -> float:
+    """1.0sec period design spectral acceleration coefficient [dimensionless]
+
+    Args:
+        S1 (float): 1.0sec period map spectral acceleration coefficient [dimensionless]
+        F1 (float): Local ground effect coefficient for 1.0 period
+
+    Returns:
+        float: S_D1
+    """
+    # 1sec period
+    SD1 = S1 * F1
+    return SD1
+
+def Get_TA(SD1 : float, SDs : float) -> float:
+    """Calculates left corner period of the horizontal elastic design spectrum
+
+    Args:
+        SD1 (float): 1.0sec period design spectral acceleration coefficient
+        SDs (float): Short period design spectral acceleration coefficient
+
+    Returns:
+        float: T_A
+    """
+    TA = 0.2 * SD1 / SDs
+    return TA
+    
+def Get_TB(SD1 : float, SDs : float) -> float:
+    """Calculates right corner period of the horizontal elastic design spectrum
+
+    Args:
+        SD1 (float): 1.0sec period design spectral acceleration coefficient
+        SDs (float): Short period design spectral acceleration coefficient
+
+    Returns:
+        float: T_B
+    """
+    return SD1 / SDs
+
+def HorizontalElasticSpectrum(TA : float, TB : float, SDs : float, SD1 : float, TL : float)-> pd.DataFrame:
+    """Calculates horizontal elastic design spectrum
+
+    Args:
+        TA (float): Left corner period of the horizontal elastic design spectrum
+        TB (float): Right corner period of the horizontal elastic design spectrum
+        SD1 (float): 1.0sec period design spectral acceleration coefficient
+        SDs (float): Short period design spectral acceleration coefficient
+        TL (float): Transition period [sec] to the constant displacement region in the horizontal elastic design spectrum
+
+    Returns:
+        pd.DataFrame: Target_Spec
+    """
+
+    T_list = np.arange(0.0, TL,.005)
+        
+    Sa = []
+    
+    for i in T_list:
+        
+        if i <TA:
+            Sa.append(round((0.4 + 0.6*(i/TA))*SDs, 4))
+            
+        elif i >= TA and i <= TB:
+            Sa.append(round(SDs, 4))
+            
+        elif i>TB and i <= TL:
+            Sa.append(round(SD1/i, 4))
+            
+        elif i> TL:
+            Sa.append(round(SD1 * TL/(i**2), 4))
+            
+    target_spec = {"T" : T_list,"Sae" : Sa}
+
+    target_spec_df = pd.DataFrame().from_dict(target_spec)
+    del target_spec,Sa,T_list
+    
+    return target_spec_df
+
+def HorizontalDisplacementSpectrum(ElasticSpectrums : pd.DataFrame) -> None:
+    """Calculates horizontal displacement design spectrum according to TSC2018
+
+    Args:
+        ElasticSpectrums (pd.DataFrame): _description_
+    """
+    Sde = [(T**2/4*3.14**2)*9.81*Sae for T,Sae in zip(ElasticSpectrums["T"],ElasticSpectrums["Sae"])]
+    ElasticSpectrums["Sde"] = Sde
+
+def VerticalElasticSpektrum(self,ElasticSpectrums : pd.DataFrame,TA : float, TB : float, SDs : float, TL : float) -> None:
+    """Calculates vertical elastic design spectrum
+
+    Args:
+        ElasticSpectrums (pd.DataFrame): horizontal elastic design spectrums DataFrame
+        TA (float): Left corner period of the horizontal elastic design spectrum
+        TB (float): Right corner period of the horizontal elastic design spectrum
+        SDs (float): Short period design spectral acceleration coefficient
+        TL (float): Transition period [sec] to the constant displacement region in the horizontal elastic design spectrum
+    """
+    TAD , TBD , TLD = TA / 3 , TB / 3 , TL/2 
+    Sve = []
+    for T in ElasticSpectrums["T"] :
+        if T < TAD :
+            Sve.append(( 0.32 + 0.48*(T/TAD))* SDs)
+            continue
+        elif T >= TAD and T <= TBD:
+            Sve.append(0.8 * SDs)
+            continue
+        elif T> TBD and T <= TLD:
+            Sve.append( 0.8 * SDs * TBD / T)
+            continue
+        elif T> TLD:
+            Sve.append( np.nan )
+            continue
+    ElasticSpectrums["Sve"] = Sve
+
+    del Sve
+
+def Get_Ra(R : float, D : float, T : float, TB : float, I : float) -> float:
+    """Calculates the earthquake load reduction coefficient according to the given natural vibration period
+
+    Args:
+        T (float): Natural vibration period
+
+    Returns:
+        float: earthquake load reduction coefficient
+    """
+    if T > TB:
+        Ra = R / I
+    else:
+        Ra = D + ((R/I)-D)*(T/TB)
+    return Ra
+    
+def ReducedTargetSpectrum(ElasticSpectrums : pd.DataFrame, Rx : float, Dx : float, Ry :float, Dy : float, TB : float, I : float) -> None:
+    """Calculates reduced target spectrum
+
+    Args:
+        ElasticSpectrums (pd.DataFrame): _description_
+        Rx (float): Response modification coefficient in the X direction
+        Dx (float): Overstrength factor in the X direction
+        Ry (float): Response modification coefficient in the Y direction
+        Dy (float): Overstrength factor in the Y direction
+        TB (float): Right corner period of the horizontal elastic design spectrum
+        I (float): Buildings importance factor
+    """
+    Tw = ElasticSpectrums["T"]
+
+    RaT_x = [ Get_Ra(Rx, Dx, T , TB, I) for T in Tw ]
+    RaT_y = [ Get_Ra(Ry, Dy, T , TB, I) for T in Tw ]
+
+    SaR_x = [(Sa/Ra) for Sa,Ra in zip(ElasticSpectrums["Sae"],RaT_x)]
+    SaR_y = [(Sa/Ra) for Sa,Ra in zip(ElasticSpectrums["Sae"],RaT_y)]
+
+    ElasticSpectrums["RaT_x"] = RaT_x
+    ElasticSpectrums["SaR_x"] = SaR_x
+    ElasticSpectrums["RaT_y"] = RaT_y
+    ElasticSpectrums["SaR_y"] = SaR_y
+    del SaR_x,SaR_y,RaT_x,RaT_y,Tw
+
+
 
 # create initial function
 def tbecTargetSpectrum(lat, lon, soil, intensity):
